@@ -1,5 +1,3 @@
-from nmr_styles import TerminalStyleManager
-
 class ProgressBar:
     def __init__(self, total = 100, prefix='‚', suffix='', decimals=1, length=50, print_end="\r"):
         self.total = total

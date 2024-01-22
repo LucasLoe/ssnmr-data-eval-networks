@@ -6,9 +6,9 @@ from lmfit import minimize
 from scipy.optimize import curve_fit
 
 # internal dependencies
-from nmr_styles import ColorManager, TerminalStyleManager
-from mq_functions import DataEvaluator
-from misc import ProgressBar
+from .nmr_styles import ColorManager, TerminalStyleManager
+from .mq_functions import DataEvaluator
+from .misc import ProgressBar
 
 class MQFitRoutine:
 
@@ -76,7 +76,7 @@ class MQFitRoutine:
         # loop for a1 variation
 
         if not rand:
-                print('Fitting procedure started with randomization flag = false')
+                print('Fitting procedure started with randomization flag = False')
                 rand_num = 1
 
         self.progressbar.total = a1_stepnumber * rand_num

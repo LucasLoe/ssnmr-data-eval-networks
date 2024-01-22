@@ -1,7 +1,6 @@
-import os
 import random
 import numpy as np
-from mq_functions import DataEvaluator
+from .mq_functions import DataEvaluator
 from lmfit import Parameters
 
 class Config:
