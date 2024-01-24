@@ -1,0 +1,411 @@
+program setup();
+
+#----Definition of acquisition parameters----#
+ 
+par;
+  scans(128);
+  dummy_shots(0);	
+  rd		(2.0);
+  gain  	(85);
+  dbw		(20000.000000);
+  abw		("narrow");
+  off_comp 	("off");
+  det_mode 	("complex");
+  magn_mode	( "PSD" );
+  dig_res 	("fast");
+endpar;
+
+return(TRUE);
+
+#----Application configuration table----#
+
+program config();
+
+int temp_int;
+real temp_real;
+char temp_string[64];
+
+strcpy( temp_string, get_text(CALIBRATION_FILE,"fname" ));
+if(ERROR) set_conf (CI_INPUT,TRUE,"File Name","C:\User\");
+else set_conf (CI_INPUT,TRUE,"File Name",temp_string); endif;
+
+temp_real = get_real(CALIBRATION_FILE,"tcy");
+if(ERROR) set_conf (CI_INPUT,TRUE,"Initial Cycle Time [ms]","0.0");
+else set_conf (CI_INPUT,TRUE,"Initial Cycle Time [ms]",temp_real); endif;
+
+temp_real = get_real(CALIBRATION_FILE,"itc");
+if(ERROR) set_conf (CI_INPUT,TRUE,"Cycle Time Increment [ms]","0.04");
+else set_conf (CI_INPUT,TRUE,"Cycle Time Increment [ms]",temp_real); endif;
+
+temp_int = get_int(CALIBRATION_FILE,"nc");
+if(ERROR) set_conf (CI_INPUT,TRUE,"Number of Cycles (multiples of 2!)","2");
+else set_conf (CI_INPUT,TRUE,"Number of Cycles (multiples of 2!)",temp_int); endif;
+
+temp_int = get_int(CALIBRATION_FILE,"nexp");
+if(ERROR) set_conf (CI_INPUT,TRUE,"Number of DQ Build-Up Points","20");
+else set_conf (CI_INPUT,TRUE,"Number of DQ Build-Up Points",temp_int); endif;
+
+temp_int = get_int(CALIBRATION_FILE,"ip");
+if(ERROR) set_conf (CI_INPUT,TRUE,"Double Increment after ... Points","10"); 
+else set_conf (CI_INPUT,TRUE,"Double Increment after ... Points",temp_int); endif;
+
+temp_real = get_real(CALIBRATION_FILE,"fitd");
+if(ERROR) set_conf (CI_INPUT,TRUE,"FID Evaluation Interval [ms]","0.02");
+else set_conf (CI_INPUT,TRUE,"FID Evaluation Interval [ms]",temp_real); endif;
+
+temp_int = get_int(CALIBRATION_FILE,"savefid");
+if(ERROR) set_conf (CI_SELECT,TRUE,"Save every FID",FALSE);
+else if(temp_int==1) set_conf(CI_SELECT,TRUE,"Save every FID",TRUE); 
+	else set_conf(CI_SELECT,TRUE,"Save every FID",FALSE); endif;
+endif;
+
+set_conf (CI_TEXT,TRUE,"File Name and Delays");
+get_conf ("Options","DQ Sequence Parameters (log. increment!!)",0);
+if (ESC) goto escape; endif;
+
+print_line (CALIBRATION_FILE,"fname", tst_conf (CI_INPUT,0));
+print_line (CALIBRATION_FILE,"tcy", ator ( tst_conf (CI_INPUT,1) ));
+print_line (CALIBRATION_FILE,"itc", ator ( tst_conf (CI_INPUT,2) ));
+
+temp_int = atoi(tst_conf(CI_INPUT,3));
+if((temp_int mod 2) <> 0)
+	temp_int = temp_int+1;
+	print_line (CONFIRMBOX,"nc must be a multiple of 2! nc is now set to ",temp_int,"!");
+	if(ESC) goto escape; endif;
+endif;
+print_line (CALIBRATION_FILE,"nc", temp_int);
+print_line (CALIBRATION_FILE,"nexp", atoi (tst_conf (CI_INPUT,4) ));
+print_line (CALIBRATION_FILE,"ip", atoi (tst_conf (CI_INPUT,5) ));
+print_line (CALIBRATION_FILE,"fitd", ator ( tst_conf (CI_INPUT,6) ));
+print_line (CALIBRATION_FILE,"savefid", tst_conf (CI_SELECT,0));
+
+label escape;
+return(TRUE);
+
+program measure(); 
+
+#----Declaration of variables needed----#
+
+int	phe0[33], phe1[33], phe2[33], phe3[33];
+int phr0,phr1,phr2,phr3,phc0[33], phc1[33];  
+int	phro[33], phrcSref[33], phrcSdq[33];
+int cnt, out, pntno, inc_pt, dqref_flag;
+int	nexp, nc, n_temp, fitpts;
+int 	time_domain, out2;
+real    fit_x[1000], fit_y[1000], ret;
+real	tc, tcmin, itc, taud, fitd, acq, p90, p180, rdt, dshort, dlong; 
+real 	x_array[10000], y_array[10000], result[10], error[10];	
+real 	FIDt[65536], FIDyreal[65536], FIDyimag[65536];
+
+char 	name[64], name2[64];
+
+real p90inc, p180inc;
+int cp90, cp180, cnt90, cnt180;
+
+acq = 0.5;
+
+nexp = get_int(CALIBRATION_FILE,"nexp");
+strcpy ( name, get_text(CALIBRATION_FILE,"fname" ));
+fitd = get_real(CALIBRATION_FILE,"fitd");
+
+#---- set increments for both pulses and number of increments ----#
+p90inc = 0.075;
+p180inc = 0.075;
+cp90 = 13;
+cp180 = 13;
+
+print_line(RESULTBOX);
+print_line(RESULTBOX,"----DQ build-up experiment started----");
+print_line(RESULTBOX,"data file: ",name);
+
+phe0[0]=0;		phe1[0]=90;		phe2[0]=180;	phe3[0]=270;
+phe0[1]=90;		phe1[1]=180;	phe2[1]=270;	phe3[1]=0;
+phe0[2]=180;	phe1[2]=270;	phe2[2]=0;		phe3[2]=90;
+phe0[3]=270;	phe1[3]=0;		phe2[3]=90;		phe3[3]=180;
+phe0[4]=REDO;	phe1[4]=REDO;	phe2[4]=REDO;	phe3[4]=REDO;
+
+phr0=0;			phr1=90;		phr2=180; 		phr3=270;
+
+phro[0]=0;		phrcSdq[0]=0;	
+phro[1]=0;		phrcSdq[1]=180;
+phro[2]=0;		phrcSdq[2]=0;
+phro[3]=0;		phrcSdq[3]=180;
+phro[4]=90;		phrcSdq[4]=90;
+phro[5]=90;		phrcSdq[5]=270;
+phro[6]=90;		phrcSdq[6]=90;
+phro[7]=90;		phrcSdq[7]=270;
+phro[8]=180;	phrcSdq[8]=180;
+phro[9]=180;	phrcSdq[9]=0;
+phro[10]=180;	phrcSdq[10]=180;
+phro[11]=180;	phrcSdq[11]=0;
+phro[12]=270;	phrcSdq[12]=270;
+phro[13]=270;	phrcSdq[13]=90;
+phro[14]=270;	phrcSdq[14]=270;
+phro[15]=270;	phrcSdq[15]=90;
+phro[16]=REDO;	phrcSdq[16]=REDO;
+
+cnt=0; while(cnt<17) phrcSref[cnt]=phro[cnt]; cnt=cnt+1; endwhile;
+
+cnt=0;
+
+while(cnt<16)
+	phc0[cnt]=180;
+	phc0[16+cnt]=0;
+	phc1[cnt]=270;
+	phc1[16+cnt]=90;
+	phrcSref[16+cnt]=(phrcSref[cnt]+180) mod 360;
+	phrcSdq[16+cnt]=(phrcSdq[cnt]+180) mod 360;
+	cnt=cnt+1;
+endwhile;
+phc0[32]=REDO;
+phc1[32]=REDO;
+phrcSref[32]=REDO;
+phrcSdq[32]=REDO;
+
+#----Loop for p90----#
+
+cnt90 = 0;
+
+while (cnt90 < cp90)
+
+    #----Loop for p180----#
+
+    cnt180 = 0;
+
+    while (cnt180 < cp180)
+
+        #----Loop for DQ build-up sequence----#
+
+		tc = get_real(CALIBRATION_FILE,"tcy");
+		itc = get_real(CALIBRATION_FILE,"itc");
+		nc = get_int(CALIBRATION_FILE,"nc") div 2;
+		inc_pt = get_int(CALIBRATION_FILE,"ip");
+		taud = 1;
+
+        p90= 1.845 + cnt90 * p90inc;
+        p180= 2.92 + cnt180 * p180inc;
+        rdt=get("RDT");
+
+        tcmin = 12*(0.002+p90/2000);
+        cnt=0;
+        out=0;
+        n_temp=0;
+
+        #print_line(RESULTBOX,"data: ",cnt,"/",nexp);#
+
+        while ( cnt < 2*nexp )
+
+            pntno = cnt div 2;
+            dqref_flag = cnt mod 2;
+
+            if(tc<tcmin) tc=tcmin; else n_temp=nc; endif;
+
+            dshort=tc/24-p90/2000;
+            dlong=tc/12-p90/2000-p180/2000;
+
+            if(n_temp==0)
+                if(itc>tcmin) tc=0;
+                else tc=tcmin-itc;
+                endif;
+            endif;
+
+            pulses;
+
+                # composite-pulse spin temp. inversion #
+                ssp ( p90,phr0 );
+                sd ( 0.002 );
+                ssp ( p90,phr1 );
+                sd ( 0.002 );
+                ssp ( p90,phc1 );
+                sd ( 0.002 );
+                ssp ( p90,phc0 );
+                sd ( 0.002 );
+
+                ploop ( n_temp )		#excitation#
+
+                sd ( dshort );
+                ssp ( p90,phe0 );
+                sd ( dlong );
+                ssp ( p180, phe1 );
+                sd ( dlong );
+                ssp ( p90,phe0 );
+                sd ( dshort );
+                sd ( dshort );
+                ssp ( p90,phe0 );
+                sd ( dlong );
+                ssp ( p180, phe1 );
+                sd ( dlong );
+                ssp ( p90,phe0 );
+                sd ( dshort );
+                sd ( dshort );
+                ssp ( p90,phe2 );
+                sd ( dlong );
+                ssp ( p180, phe3 );
+                sd ( dlong );
+                ssp ( p90,phe2 );
+                sd ( dshort );
+                sd ( dshort );
+                ssp ( p90,phe2 );
+                sd ( dlong );
+                ssp ( p180, phe3 );
+                sd ( dlong );
+                ssp ( p90,phe2 );
+                sd ( dshort );
+
+                sd ( dshort );
+                ssp ( p90,phe2 );
+                sd ( dlong );
+                ssp ( p180, phe3 );
+                sd ( dlong );
+                ssp ( p90,phe2 );
+                sd ( dshort );
+                sd ( dshort );
+                ssp ( p90,phe2 );
+                sd ( dlong );
+                ssp ( p180, phe3 );
+                sd ( dlong );
+                ssp ( p90,phe2 );
+                sd ( dshort );
+                sd ( dshort );
+                ssp ( p90,phe0 );
+                sd ( dlong );
+                ssp ( p180, phe1 );
+                sd ( dlong );
+                ssp ( p90,phe0 );
+                sd ( dshort );
+                sd ( dshort );
+                ssp ( p90,phe0 );
+                sd ( dlong );
+                ssp ( p180, phe1 );
+                sd ( dlong );
+                ssp ( p90,phe0 );
+                sd ( dshort );
+
+
+                endploop;
+
+                ploop ( n_temp )		#reconversion#
+
+                sd ( dshort );
+                ssp ( p90,phr1 );
+                sd ( dlong );
+                ssp ( p180, phr2 );
+                sd ( dlong );
+                ssp ( p90,phr1 );
+                sd ( dshort );
+                sd ( dshort );
+                ssp ( p90,phr1 );
+                sd ( dlong );
+                ssp ( p180, phr2 );
+                sd ( dlong );
+                ssp ( p90,phr1 );
+                sd ( dshort );
+                sd ( dshort );
+                ssp ( p90,phr3 );
+                sd ( dlong );
+                ssp ( p180, phr0 );
+                sd ( dlong );
+                ssp ( p90,phr3 );
+                sd ( dshort );
+                sd ( dshort );
+                ssp ( p90,phr3 );
+                sd ( dlong );
+                ssp ( p180, phr0 );
+                sd ( dlong );
+                ssp ( p90,phr3 );
+                sd ( dshort );
+
+                sd ( dshort );
+                ssp ( p90,phr3 );
+                sd ( dlong );
+                ssp ( p180, phr0 );
+                sd ( dlong );
+                ssp ( p90,phr3 );
+                sd ( dshort );
+                sd ( dshort );
+                ssp ( p90,phr3 );
+                sd ( dlong );
+                ssp ( p180, phr0 );
+                sd ( dlong );
+                ssp ( p90,phr3 );
+                sd ( dshort );
+                sd ( dshort );
+                ssp ( p90,phr1 );
+                sd ( dlong );
+                ssp ( p180, phr2 );
+                sd ( dlong );
+                ssp ( p90,phr1 );
+                sd ( dshort );
+                sd ( dshort );
+                ssp ( p90,phr1 );
+                sd ( dlong );
+                ssp ( p180, phr2 );
+                sd ( dlong );
+                ssp ( p90,phr1 );
+                sd ( dshort );
+
+                endploop;
+
+                sd ( taud );		
+                ssp ( p90,phro );	
+                cta;
+                sd(rdt);
+                if(dqref_flag==0)
+                    adi ( acq, MAX, phrcSref);
+                else
+                    adi ( acq, MAX, phrcSdq);
+                endif
+                sd ( 1 );
+            endpulses;
+
+            measure;
+            if(ESC)
+                goto EXIT;
+            endif;
+
+            if(tc>0) x_array[cnt]= 2*n_temp*tc*(1-12*0.001*p90/tc);
+            else x_array[cnt]=0;
+            endif;
+            #duty factor correction!#
+
+            if(dqref_flag==0)
+                print_line(RESULTLINE," S_ref(",round(x_array[cnt]*100)/100," ms) = ",round(y_array[cnt]*1000)/1000," %");
+                print_line(RESULTBOX," S_ref(",round(x_array[cnt]*100)/100," ms) = ",round(y_array[cnt]*1000)/1000," %");
+            else
+                print_line(RESULTLINE," S_DQ(",round(x_array[cnt]*100)/100," ms) = ",round(y_array[cnt]*1000)/1000,"% (norm. ",round(100*y_array[cnt]/(y_array[cnt]+y_array[cnt-1]))/100,")");
+                print_line(RESULTBOX," S_DQ(",round(x_array[cnt]*100)/100," ms) = ",round(y_array[cnt]*1000)/1000,"% (norm. ",round(100*y_array[cnt]/(y_array[cnt]+y_array[cnt-1]))/100,")");
+            endif
+
+            cnt=cnt+1;
+            if(dqref_flag<>0) #increment tau_DQ only after every other exp.#
+                if( ( ((pntno mod inc_pt) == 0) and cnt > 2) ) #double increment whenever inc_pt is reached#
+                    itc = itc*2;
+                    print_line(RESULTBOX,"Cycle Time inc. after point ",pntno+1,": ",itc);
+                endif
+                tc = tc + itc;
+            endif;
+
+        endwhile;
+
+        #----Saving data----#
+        
+        label EXIT;
+        file_name ( ASCII_FILE, name );
+        print_line(RESULTBOX,"Saving ",name,".mdt...");
+        while ( out < cnt )
+            print_line( ASCII_FILE,x_array[out],"	",y_array[out],"	",y_array[out+1],"	",y_array[out+1]/(y_array[out]+y_array[out+1]) );
+            out=out+2;
+        endwhile;
+        print_line( ASCII_FILE,p90,"	",p180 );
+        print_line(RESULTBOX,"Finished experiment with: p90 = ",p90,"  ","p180 = ",p180);
+
+        replace_signal (x_array, y_array, cnt);
+
+        cnt180 = cnt180 + 1;
+    endwhile;
+
+    cnt90 = cnt90 + 1;
+endwhile;
+
+
+label end;
